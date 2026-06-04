@@ -232,18 +232,21 @@ AI教学分析课堂质量评估系统已在多所高校试点，评估维度涵
 
 
 \subsubsection{YOLO 训练数据}
-本项目抬头率部分使用两个 YOLO 模型。第一个是头部状态模型，输入为学生区域图像，输出抬头和低头两类头部框。该模型直接参与抬头率计算，抬头人数和低头人数均来自它的检测结果。第二个是人脸检测模型，输入同一帧图像，输出可见人脸框。该模型不参与分母统计，只用于辅助检查正脸可见数量，帮助解释某些帧中抬头人数和人脸数量不一致的情况。
+本项目抬头率部分没有重新训练 YOLO 模型，而是直接使用源码中的 yolo-face 和 yolo-head。yolo-face 对应 \texttt{yolov10n-face.pt}，用于检测可见人脸。yolo-head 对应 \texttt{yolov10n-head.pt}，用于检测学生头部。系统先分别得到人脸框和头部框，再判断人脸中心是否落在头部框内。匹配成功的头部记为抬头，未匹配到人脸的头部记为低头。
 
-头部状态模型的数据标注以头部区域为基本目标，类别划分为抬头和低头。人脸检测模型的数据标注以可见人脸区域为目标，只记录正脸和较清晰侧脸。两个模型均采用 YOLO 格式标注，训练时保持相同输入尺寸，便于后处理阶段在同一帧上叠加显示。训练代码保持简单，核心片段如下：
+源码中两个模型的默认路径和下载地址如下，未涉及本项目重新训练：
 
-\begin{lstlisting}[language=Python, caption=YOLO 模型训练代码]
-from ultralytics import YOLO
+\begin{lstlisting}[language=Python, caption=YOLO 模型配置源码]
+DEFAULT_FACE_MODEL = WEIGHTS_DIR / "yolov10n-face.pt"
+DEFAULT_HEAD_MODEL = WEIGHTS_DIR / "yolov10n-head.pt"
 
-head = YOLO('./yolov8n.pt')
-head.train(data = './head.yaml', imgsz = 960, epochs = 80, batch = 8)
-
-face = YOLO('./yolov8n.pt')
-face.train(data = './face.yaml', imgsz = 960, epochs = 60, batch = 8)
+FACE_MODEL_URL = (
+    "https://github.com/akanametov/yolo-face/releases/download/1.0.0/yolov10n-face.pt"
+)
+HEAD_MODEL_URLS = (
+    "https://github.com/akanametov/yolo-face/releases/download/1.0.0/yolov10n-head.pt",
+    "https://cdn.jsdelivr.net/gh/Abcfsa/YOLOv8_head_detector@main/nano.pt",
+)
 \end{lstlisting}
 
 \subsubsection{OCR 训练数据}
@@ -313,7 +316,7 @@ warped = cv2.warpPerspective(img, M, (max_width, max_height))
 \subsubsection{文字检测与识别}
 
 \subsection{抬头率计算流程}
-抬头率计算流程针对前置摄像机视频。系统按固定间隔抽帧，将同一帧图像分别送入头部状态模型和人脸检测模型。头部状态模型输出抬头框和低头框，用于计算抬头率。人脸检测模型输出人脸框，用于记录人脸数量。后处理阶段先按置信度筛选检测框，再用 YOLO 内置非极大值抑制去掉重复框。保留下来的头部框即为当前帧参与统计的学生头部目标。
+抬头率计算流程针对前置摄像机视频。系统按固定间隔抽帧，将同一帧图像分别送入 yolo-face 和 yolo-head。yolo-face 输出人脸框，yolo-head 输出头部框。随后系统对两组框进行匹配，若人脸中心落在某个头部框内，则该头部判为抬头；否则判为低头。该方法没有单独训练抬头/低头分类模型，而是利用人脸可见性和头部位置关系完成状态判断。
 
 设第 $t$ 帧的抬头人数为 $M_t$，低头人数为 $D_t$，学生总数为：
 
@@ -333,89 +336,68 @@ R_t = \frac{M_t}{N_t} \times 100\%
 \bar{R}_t = \frac{\sum_{i=t-k}^{t} M_i}{\sum_{i=t-k}^{t} N_i} \times 100\%
 \]
 
-窗口平滑不会改变检测类别，只减少短时抖动。最终输出包括逐帧统计表、叠加检测框的示例图和整堂课抬头率曲线。核心后处理代码如下：
+窗口平滑不会改变检测类别，只减少短时抖动。最终输出包括逐帧统计表、叠加检测框的示例图和整堂课抬头率曲线。核心匹配源码如下：
 
-\begin{lstlisting}[language=Python, caption=抬头率后处理代码]
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
-from ultralytics import YOLO
+\begin{lstlisting}[language=Python, caption=人脸与头部匹配源码]
+def match_heads_to_faces(
+    face_boxes: np.ndarray,
+    head_boxes: np.ndarray,
+) -> tuple[list[bool], set[int]]:
+    """Match each head to at most one face; face center inside head box => head up."""
+    if len(head_boxes) == 0:
+        return [], set()
 
-head = YOLO('./head.pt')
-face = YOLO('./face.pt')
-cap = cv2.VideoCapture('./class.mp4')
-fps = cap.get(cv2.CAP_PROP_FPS)
-gap = int(fps)
+    candidates: list[tuple[float, int, int]] = []
+    for head_idx, head in enumerate(head_boxes):
+        for face_idx, face in enumerate(face_boxes):
+            cx, cy = box_center(face)
+            if point_in_box(cx, cy, head):
+                candidates.append((box_iou(face, head), head_idx, face_idx))
 
-ts = []
-rate = []
-faces = []
-i = 0
-ok, img = cap.read()
+    candidates.sort(reverse=True)
+    matched_heads: set[int] = set()
+    matched_faces: set[int] = set()
+    head_up_flags = [False] * len(head_boxes)
 
-while ok:
-    if i % gap == 0:
-        hr = head(img, conf = 0.35, iou = 0.5, verbose = False)[0]
-        fr = face(img, conf = 0.35, iou = 0.5, verbose = False)[0]
-        up = 0
-        down = 0
+    for _, head_idx, face_idx in candidates:
+        if head_idx in matched_heads or face_idx in matched_faces:
+            continue
+        matched_heads.add(head_idx)
+        matched_faces.add(face_idx)
+        head_up_flags[head_idx] = True
 
-        for box in hr.boxes:
-            cls = int(box.cls[0])
-            if cls == 0:
-                up += 1
-            if cls == 1:
-                down += 1
-
-        total = up + down
-        r = up / total * 100
-        ts.append(i / fps)
-        rate.append(r)
-        faces.append(len(fr.boxes))
-
-    i += 1
-    ok, img = cap.read()
-
-win = 5
-smooth = np.convolve(rate, np.ones(win) / win, mode = 'same')
-
-plt.plot(np.array(ts) / 60, smooth)
-plt.xlabel('time/min')
-plt.ylabel('rate/%')
-plt.savefig('./rate.png', dpi = 200)
+    return head_up_flags, matched_faces
 \end{lstlisting}
 
-检测结果叠加图由同一帧的两个模型输出共同生成。头部状态模型负责绿色和橙色框，人脸检测模型负责统计左上角的人脸数量。可视化代码片段如下：
+检测统计由同一帧的两个模型输出共同生成。源码先运行 yolo-face 和 yolo-head，再调用匹配函数得到抬头标记，最后计算抬头率：
 
-\begin{lstlisting}[language=Python, caption=检测结果绘制代码]
-img = cv2.imread('./frame.jpg')
-hr = head(img, conf = 0.35, iou = 0.5, verbose = False)[0]
-fr = face(img, conf = 0.35, iou = 0.5, verbose = False)[0]
+\begin{lstlisting}[language=Python, caption=抬头率统计源码]
+def detect_stats(face_model: YOLO, head_model: YOLO, frame: np.ndarray) -> tuple[DetectionStats, OverlayState]:
+    face_result = face_model(frame, verbose=False)[0]
+    head_result = head_model(frame, verbose=False)[0]
 
-up = 0
-down = 0
+    face_boxes = boxes_xyxy(face_result)
+    head_boxes = boxes_xyxy(head_result)
+    face_count = len(face_boxes)
+    head_count = len(head_boxes)
+    head_up_flags, matched_faces = match_heads_to_faces(face_boxes, head_boxes)
+    head_up_count = sum(head_up_flags)
+    head_up_rate = head_up_count / head_count if head_count > 0 else 0.0
 
-for box in hr.boxes:
-    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-    cls = int(box.cls[0])
-
-    if cls == 0:
-        up += 1
-        color = (0, 255, 0)
-        name = 'up'
-    if cls == 1:
-        down += 1
-        color = (0, 128, 255)
-        name = 'down'
-
-    cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-    cv2.putText(img, name, (x1, y1 - 4), 0, 0.6, color, 2)
-
-total = up + down
-r = up / total * 100
-txt = f'up:{up}/total:{total} face:{len(fr.boxes)} rate:{r:.1f}%'
-cv2.putText(img, txt, (8, 28), 0, 0.7, (0, 255, 0), 2)
-cv2.imwrite('./overlay.jpg', img)
+    stats = DetectionStats(
+        face_count=face_count,
+        head_count=head_count,
+        head_up_count=head_up_count,
+        head_up_rate=head_up_rate,
+    )
+    overlay = OverlayState(
+        stats=stats,
+        face_boxes=face_boxes,
+        head_boxes=head_boxes,
+        head_up_flags=head_up_flags,
+        matched_face_indices=matched_faces,
+    )
+    return stats, overlay
 \end{lstlisting}
 
 
@@ -632,9 +614,9 @@ E = \frac{1}{T} \sum_{t=1}^{T} \left|R_{pred,t} - R_{true,t}\right|
     \label{fig:taitou_original_overlay}
 \end{figure}
 
-检测叠加图中，绿色框表示抬头，橙色框表示低头，两类框来自头部状态 YOLO 模型。左上角同步显示时间、抬头人数、学生总数、人脸数量和抬头率，其中人脸数量来自人脸 YOLO 模型。检测框和统计值保持对应，便于检查单帧结果。
+检测叠加图中，绿色框表示匹配到人脸的头部，橙色框表示未匹配到人脸的头部。头部框来自 yolo-head，人脸框来自 yolo-face。左上角同步显示时间、抬头人数、学生总数、人脸数量和抬头率。检测框和统计值保持对应，便于检查单帧结果。
 
-状态判定以头部区域外观为依据。正向头部通常判为抬头，俯向桌面的头部判为低头。人脸模型只提供可见人脸数量，用于观察正脸可见程度，最终抬头率仍按头部状态模型计算。
+状态判定以人脸框和头部框的匹配关系为依据。人脸中心落入头部框时记为抬头，没有匹配到人脸的头部记为低头。人脸数量用于观察正脸可见程度，最终抬头率按匹配后的头部状态计算。
 
 \begin{figure}[H]
     \centering
