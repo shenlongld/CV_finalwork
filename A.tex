@@ -232,7 +232,19 @@ AI教学分析课堂质量评估系统已在多所高校试点，评估维度涵
 
 
 \subsubsection{YOLO 训练数据}
-YOLO 模型训练数据主要服务于学生头部状态检测任务。数据标注以头部区域为基本目标，类别划分为抬头和低头。训练前将标注结果转换为 YOLO 格式，并统一图像尺寸、类别编号和划分文件。训练过程中采用亮度扰动、尺度缩放和随机裁剪增强模型对教室光照变化、远距离小目标和局部遮挡的适应能力。
+本项目抬头率部分使用两个 YOLO 模型。第一个是头部状态模型，输入为学生区域图像，输出抬头和低头两类头部框。该模型直接参与抬头率计算，抬头人数和低头人数均来自它的检测结果。第二个是人脸检测模型，输入同一帧图像，输出可见人脸框。该模型不参与分母统计，只用于辅助检查正脸可见数量，帮助解释某些帧中抬头人数和人脸数量不一致的情况。
+
+头部状态模型的数据标注以头部区域为基本目标，类别划分为抬头和低头。人脸检测模型的数据标注以可见人脸区域为目标，只记录正脸和较清晰侧脸。两个模型均采用 YOLO 格式标注，训练时保持相同输入尺寸，便于后处理阶段在同一帧上叠加显示。训练代码保持简单，核心片段如下：
+
+\begin{lstlisting}[language=Python, caption=YOLO 模型训练代码]
+from ultralytics import YOLO
+
+head = YOLO('./yolov8n.pt')
+head.train(data = './head.yaml', imgsz = 960, epochs = 80, batch = 8)
+
+face = YOLO('./yolov8n.pt')
+face.train(data = './face.yaml', imgsz = 960, epochs = 60, batch = 8)
+\end{lstlisting}
 
 \subsubsection{OCR 训练数据}
 
@@ -301,7 +313,7 @@ warped = cv2.warpPerspective(img, M, (max_width, max_height))
 \subsubsection{文字检测与识别}
 
 \subsection{抬头率计算流程}
-抬头率计算流程针对前置摄像机视频。系统按固定间隔抽帧，将帧图像送入 YOLO 检测模型。模型输出头部框、类别和置信度，类别包括抬头和低头。后处理阶段先按置信度筛选检测框，再用非极大值抑制去掉重复框。保留下来的框即为当前帧参与统计的学生头部目标。
+抬头率计算流程针对前置摄像机视频。系统按固定间隔抽帧，将同一帧图像分别送入头部状态模型和人脸检测模型。头部状态模型输出抬头框和低头框，用于计算抬头率。人脸检测模型输出人脸框，用于记录人脸数量。后处理阶段先按置信度筛选检测框，再用 YOLO 内置非极大值抑制去掉重复框。保留下来的头部框即为当前帧参与统计的学生头部目标。
 
 设第 $t$ 帧的抬头人数为 $M_t$，低头人数为 $D_t$，学生总数为：
 
@@ -329,23 +341,26 @@ import numpy as np
 import matplotlib.pyplot as plt
 from ultralytics import YOLO
 
-model = YOLO('./best.pt')
+head = YOLO('./head.pt')
+face = YOLO('./face.pt')
 cap = cv2.VideoCapture('./class.mp4')
 fps = cap.get(cv2.CAP_PROP_FPS)
 gap = int(fps)
 
 ts = []
 rate = []
+faces = []
 i = 0
 ok, img = cap.read()
 
 while ok:
     if i % gap == 0:
-        res = model(img, conf = 0.35, iou = 0.5, verbose = False)[0]
+        hr = head(img, conf = 0.35, iou = 0.5, verbose = False)[0]
+        fr = face(img, conf = 0.35, iou = 0.5, verbose = False)[0]
         up = 0
         down = 0
 
-        for box in res.boxes:
+        for box in hr.boxes:
             cls = int(box.cls[0])
             if cls == 0:
                 up += 1
@@ -356,6 +371,7 @@ while ok:
         r = up / total * 100
         ts.append(i / fps)
         rate.append(r)
+        faces.append(len(fr.boxes))
 
     i += 1
     ok, img = cap.read()
@@ -367,6 +383,39 @@ plt.plot(np.array(ts) / 60, smooth)
 plt.xlabel('time/min')
 plt.ylabel('rate/%')
 plt.savefig('./rate.png', dpi = 200)
+\end{lstlisting}
+
+检测结果叠加图由同一帧的两个模型输出共同生成。头部状态模型负责绿色和橙色框，人脸检测模型负责统计左上角的人脸数量。可视化代码片段如下：
+
+\begin{lstlisting}[language=Python, caption=检测结果绘制代码]
+img = cv2.imread('./frame.jpg')
+hr = head(img, conf = 0.35, iou = 0.5, verbose = False)[0]
+fr = face(img, conf = 0.35, iou = 0.5, verbose = False)[0]
+
+up = 0
+down = 0
+
+for box in hr.boxes:
+    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+    cls = int(box.cls[0])
+
+    if cls == 0:
+        up += 1
+        color = (0, 255, 0)
+        name = 'up'
+    if cls == 1:
+        down += 1
+        color = (0, 128, 255)
+        name = 'down'
+
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+    cv2.putText(img, name, (x1, y1 - 4), 0, 0.6, color, 2)
+
+total = up + down
+r = up / total * 100
+txt = f'up:{up}/total:{total} face:{len(fr.boxes)} rate:{r:.1f}%'
+cv2.putText(img, txt, (8, 28), 0, 0.7, (0, 255, 0), 2)
+cv2.imwrite('./overlay.jpg', img)
 \end{lstlisting}
 
 
@@ -583,9 +632,9 @@ E = \frac{1}{T} \sum_{t=1}^{T} \left|R_{pred,t} - R_{true,t}\right|
     \label{fig:taitou_original_overlay}
 \end{figure}
 
-检测叠加图中，绿色框表示抬头，橙色框表示低头。左上角同步显示时间、抬头人数、学生总数、人脸数量和抬头率。检测框和统计值保持对应，便于检查单帧结果。
+检测叠加图中，绿色框表示抬头，橙色框表示低头，两类框来自头部状态 YOLO 模型。左上角同步显示时间、抬头人数、学生总数、人脸数量和抬头率，其中人脸数量来自人脸 YOLO 模型。检测框和统计值保持对应，便于检查单帧结果。
 
-状态判定以头部区域外观为依据。正向头部通常判为抬头，俯向桌面的头部判为低头。人脸数量只作为辅助记录，最终抬头率按头部状态计算。
+状态判定以头部区域外观为依据。正向头部通常判为抬头，俯向桌面的头部判为低头。人脸模型只提供可见人脸数量，用于观察正脸可见程度，最终抬头率仍按头部状态模型计算。
 
 \begin{figure}[H]
     \centering
