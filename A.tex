@@ -93,7 +93,6 @@
 \subsection{子任务一：课件内容检测与识别}
 
 课件内容检测与识别是从课堂视频中提取PPT文本信息的关键步骤，其技术流程包括课件区域提取、透视矫正、文字检测与识别、课件切换检测和页面停留时间统计。
-@@@
 % 在课件区域提取环节，由于课堂摄像机可能存在水平偏移、俯仰角变化，课件区域在图像中通常表现为四边形区域而非标准矩形。本项目采用传统图像处理方法进行课件区域提取，包括灰度化、去噪、边缘检测、轮廓提取、多边形拟合和透视变换等步骤，获得整齐的课件画面。
 
 % 文字检测与识别环节采用OCR技术完成课件内容提取。在文本检测方面，可采用传统阈值分割方法或DBNet等深度学习方法检测文本区域；在文字识别方面，可采用CRNN或PaddleOCR等方法进行序列识别。通过OCR识别结果可以获得当前PPT页面的文本内容。
@@ -105,7 +104,7 @@
 \subsection{子任务二：学生抬头检测与注意力分析}
 
 学生抬头检测与注意力分析是评估学生课堂参与情况的核心环节，技术流程包括学生人数统计、人脸检测、抬头状态判定和抬头率计算。
-@@@
+该子任务面向前置摄像机画面，对学生座位区域进行抽帧分析。系统采用头部状态检测模型识别可见学生头部，并将目标划分为抬头和低头两类，再根据有效检测目标数量计算当前帧抬头率。与只统计人脸可见数量的方法相比，该流程能够在部分侧脸、远距离和低头状态下保留更多头部姿态信息。
 % 学生人数统计采用YOLO系列目标检测算法对课堂视频中的学生目标进行检测。训练数据来源包括GitHub开源项目、公开数据集（Kaggle、Roboflow等）以及自行采集标注的课堂视频。课堂环境中的特殊挑战包括学生遮挡、光照变化、学生坐姿差异和远距离小目标等。
 
 % 人脸检测同样采用YOLO人脸检测模型定位学生人脸区域。在获得人脸检测结果后，通过以下规则判断学生是否处于抬头状态：检测到完整人脸时认为学生处于抬头状态，未检测到人脸或仅检测到头顶部区域时认为学生处于低头状态。后续可进一步结合头部姿态估计与面部关键点检测提高准确率。
@@ -117,7 +116,6 @@
 \subsection{子任务三：教学内容与注意力相关性分析}
 
 教学内容与注意力相关性分析是建立“课件内容”与“学生课堂行为”之间对应关系的关键步骤，也是实现课堂效率评估的核心。
-@@@
 % 时间轴对齐是两路视频结果融合的前提。由于课件识别流程与学生行为分析流程分别来自两路视频，需要基于时间戳对两路结果进行对齐：将每一页PPT的停留时间区间与对应时间段内的抬头率数据进行关联，统计每页PPT对应时间段内的平均抬头率。
 
 % 在相关性分析层面，本项目计划从多个维度进行统计：每页PPT的平均抬头率反映该页内容的吸引程度；整堂课平均抬头率反映整体课堂效果；抬头率随时间变化趋势反映教学节奏是否合理；不同课件内容对应的学生注意力变化情况反映教学内容与学生参与度的匹配程度。
@@ -178,15 +176,12 @@ AI教学分析课堂质量评估系统已在多所高校试点，评估维度涵
 
 
 \section{系统设计与实现}
-本项目采用“双摄像机协同分析”的技术路线，对课堂视频中的课件内容与学生行为进行联合分析。系统通过同时采集课件视频与学生视频，从“教学内容”和“学生课堂状态”两个角度对课堂过程进行分析，并结合时间信息实现课堂效率评估。
+本项目采用双摄像机协同分析路线。后置摄像机保留课件时间线，前置摄像机负责学生区域分析。本节重点说明抬头率部分。系统从前置视频中抽帧，检测学生头部状态，统计抬头人数和低头人数，再生成整堂课抬头率曲线。
 
-其中，摄像机1采用后向前拍摄方式，主要用于采集教师授课区域与 PPT 课件内容；摄像机2采用前向后拍摄方式，主要用于采集学生区域与课堂行为。双摄像机方案能够分别针对课件识别与学生行为分析进行优化，相较于单摄像机方案能够有效降低遮挡、视角偏移等问题对识别效果的影响。
+抬头率 pipeline 为视频抽帧、图像缩放、YOLO 头部状态检测、检测框筛选、逐帧计数、滑动平滑、结果可视化。模型将头部目标分为抬头和低头两类。抬头类表示头部朝向教师、黑板或课件方向，低头类表示头部明显俯向桌面。系统按帧保存时间戳、抬头人数、低头人数、学生总数和抬头率，后续用于绘制趋势图和挑选示例帧。
 
-系统首先分别对两路视频进行处理。对于课件视频，主要完成课件区域提取、透视矫正、文字检测与识别以及课件切换检测等任务，从而获得 PPT 页面内容与页面停留时间信息；对于学生视频，主要完成人数统计、人脸检测与抬头率计算等任务，用于分析学生课堂注意力情况。
+该流程不把低头直接解释为注意力不集中，只记录可见姿态。这样处理更稳妥，低头可能来自记笔记、看材料或短时操作。系统输出的是课堂群体状态的视觉统计量，用于描述抬头比例随时间的变化。
 
-在获得两路视频分析结果后，系统进一步基于时间戳对课件时间轴与学生行为时间轴进行对齐，将不同 PPT 页面对应时间段内的抬头率数据进行关联统计。最终输出每页 PPT 的平均抬头率、整堂课平均抬头率以及抬头率变化趋势，并结合课件切换情况对课堂效率进行综合分析。
-
-@@@
 % \begin{figure}[H]
 %     \centering
 %     \includegraphics[width=1.0\textwidth]{figures/技术路线.png}
@@ -237,9 +232,24 @@ AI教学分析课堂质量评估系统已在多所高校试点，评估维度涵
 
 
 \subsubsection{YOLO 训练数据}
-@@@
+本项目抬头率部分没有重新训练 YOLO 模型，而是直接使用源码中的 yolo-face 和 yolo-head。yolo-face 对应 \texttt{yolov10n-face.pt}，用于检测可见人脸。yolo-head 对应 \texttt{yolov10n-head.pt}，用于检测学生头部。系统先分别得到人脸框和头部框，再判断人脸中心是否落在头部框内。匹配成功的头部记为抬头，未匹配到人脸的头部记为低头。
+
+源码中两个模型的默认路径和下载地址如下，未涉及本项目重新训练：
+
+\begin{lstlisting}[language=Python, caption=YOLO 模型配置源码]
+DEFAULT_FACE_MODEL = WEIGHTS_DIR / "yolov10n-face.pt"
+DEFAULT_HEAD_MODEL = WEIGHTS_DIR / "yolov10n-head.pt"
+
+FACE_MODEL_URL = (
+    "https://github.com/akanametov/yolo-face/releases/download/1.0.0/yolov10n-face.pt"
+)
+HEAD_MODEL_URLS = (
+    "https://github.com/akanametov/yolo-face/releases/download/1.0.0/yolov10n-head.pt",
+    "https://cdn.jsdelivr.net/gh/Abcfsa/YOLOv8_head_detector@main/nano.pt",
+)
+\end{lstlisting}
+
 \subsubsection{OCR 训练数据}
-@@@
 
 \subsection{课件识别流程} 
 
@@ -304,137 +314,96 @@ warped = cv2.warpPerspective(img, M, (max_width, max_height))
 经上述处理后，课件区域的透视畸变得以消除，为后续 OCR 文字识别和页面切换检测提供了高质量的输入图像。
 
 \subsubsection{文字检测与识别}
-@@@
-% 完成透视矫正后，需要对课件中的文字内容进行识别。
-
-% 本项目计划采用 OCR 方法完成课件内容提取：
-
-% \begin{itemize}
-%     \item 传统阈值分割或深度学习方法（如DBNet） 用于文本区域检测；
-%     \item 传统OCR方法或深度学习方法（如CRNN或PaddleOCR） 用于文字识别。
-% \end{itemize}
-
-% 通过 OCR 识别结果，可以获得当前 PPT 页面的文本内容，为后续课件切换检测与课堂分析提供依据。
-
-% \subsubsection{课件切换检测}
-
-% 为了统计不同 PPT 页面的停留时间，需要检测课件页面是否发生切换。
-
-% 本项目计划通过比较相邻时间段 OCR 识别结果之间的差异实现课件切换检测：
-
-% \begin{itemize}
-%     \item 若文本内容变化较小，则认为课件页面未切换；
-%     \item 若文本内容变化明显，则认为课件页面发生切换。
-% \end{itemize}
-
-% 通过记录页面切换时刻，可以建立完整的 PPT 页面时间轴。
-
-% \subsubsection{页面停留时间统计}
-
-% 在获得 PPT 页面切换时间后，可以进一步统计每页课件的停留时长。
-
-% 设某页 PPT 的开始时间为 $t_i$，结束时间为 $t_{i+1}$，则其页面停留时间为：
-
-% \[
-% T_i = t_{i+1} - t_i
-% \]
-
-% 页面停留时间能够反映教师对不同知识点的讲解时长，为后续课堂效率分析提供参考。
 
 \subsection{抬头率计算流程}
-@@@
-% 抬头率计算流程主要针对前置摄像机采集的视频流，用于分析学生课堂注意力情况。
+抬头率计算流程针对前置摄像机视频。系统按固定间隔抽帧，将同一帧图像分别送入 yolo-face 和 yolo-head。yolo-face 输出人脸框，yolo-head 输出头部框。随后系统对两组框进行匹配，若人脸中心落在某个头部框内，则该头部判为抬头；否则判为低头。该方法没有单独训练抬头/低头分类模型，而是利用人脸可见性和头部位置关系完成状态判断。
 
-% 整体流程包括：学生人数统计、人脸检测、抬头率计算。
+设第 $t$ 帧的抬头人数为 $M_t$，低头人数为 $D_t$，学生总数为：
 
-% \subsubsection{学生人数统计}
+\[
+N_t = M_t + D_t
+\]
 
-% 首先需要对课堂中的学生人数进行统计。本项目计划采用 YOLO 系列目标检测算法对课堂视频中的学生目标进行检测，并统计当前画面中的学生人数。
+当前帧抬头率为：
 
-% 本项目计划从多个渠道获取教室场景相关数据，使用 GPU 环境对 YOLO 模型进行训练与优化。主要包括以下步骤：
+\[
+R_t = \frac{M_t}{N_t} \times 100\%
+\]
 
-% \begin{enumerate}
-%     \item 训练 YOLO 学生检测模型；
-%     \item 对学生视频进行抽帧与预处理；
-%     \item 对课堂视频中的学生目标进行检测；
-%     \item 根据检测框统计当前帧中的学生人数。
-% \end{enumerate}
+单帧结果容易受到遮挡和动作影响，因此系统使用滑动窗口平滑。窗口内先累计抬头人数和总人数，再计算比例：
 
-% 考虑到课堂环境中可能存在：学生遮挡、光照变化、学生坐姿差异和远距离小目标等情况，本项目后续将尝试通过数据增强、调整输入分辨率以及优化模型参数等方式提高检测稳定性。
+\[
+\bar{R}_t = \frac{\sum_{i=t-k}^{t} M_i}{\sum_{i=t-k}^{t} N_i} \times 100\%
+\]
 
-% YOLO 算法具有检测速度快、实时性较高等优势，适合视频流处理，能够满足课堂视频分析需求。
+窗口平滑不会改变检测类别，只减少短时抖动。最终输出包括逐帧统计表、叠加检测框的示例图和整堂课抬头率曲线。核心匹配源码如下：
 
-% \subsubsection{人脸检测}
+\begin{lstlisting}[language=Python, caption=人脸与头部匹配源码]
+def match_heads_to_faces(
+    face_boxes: np.ndarray,
+    head_boxes: np.ndarray,
+) -> tuple[list[bool], set[int]]:
+    """Match each head to at most one face; face center inside head box => head up."""
+    if len(head_boxes) == 0:
+        return [], set()
 
-% 在获得学生区域后，需要进一步检测学生人脸，用于判断学生当前是否处于抬头状态。
+    candidates: list[tuple[float, int, int]] = []
+    for head_idx, head in enumerate(head_boxes):
+        for face_idx, face in enumerate(face_boxes):
+            cx, cy = box_center(face)
+            if point_in_box(cx, cy, head):
+                candidates.append((box_iou(face, head), head_idx, face_idx))
 
-% 同样地，本项目计划采用 YOLO 人脸检测模型对课堂中的学生人脸进行定位，获取每位学生的人脸区域信息。主要包括以下步骤：
+    candidates.sort(reverse=True)
+    matched_heads: set[int] = set()
+    matched_faces: set[int] = set()
+    head_up_flags = [False] * len(head_boxes)
 
-% \begin{enumerate}
-%     \item 训练 YOLO 人脸检测模型；
-%     \item 对学生视频进行抽帧与预处理；
-%     \item 对课堂视频中的学生人脸进行检测；
-%     \item 输出人脸检测框与置信度等信息。
-% \end{enumerate}
+    for _, head_idx, face_idx in candidates:
+        if head_idx in matched_heads or face_idx in matched_faces:
+            continue
+        matched_heads.add(head_idx)
+        matched_faces.add(face_idx)
+        head_up_flags[head_idx] = True
 
-% 由于课堂环境中学生可能出现低头、侧脸、遮挡等情况，因此本项目将尽可能采集不同姿态、不同距离以及不同光照条件下的数据，以提高模型鲁棒性。
+    return head_up_flags, matched_faces
+\end{lstlisting}
 
-% 在获得人脸检测结果后，可以进一步判断学生是否处于抬头状态：
+检测统计由同一帧的两个模型输出共同生成。源码先运行 yolo-face 和 yolo-head，再调用匹配函数得到抬头标记，最后计算抬头率：
 
-% \begin{itemize}
-%     \item 检测到完整人脸时，认为学生处于抬头状态；
-%     \item 未检测到人脸或仅检测到头顶部区域时，认为学生处于低头状态。
-% \end{itemize}
+\begin{lstlisting}[language=Python, caption=抬头率统计源码]
+def detect_stats(face_model: YOLO, head_model: YOLO, frame: np.ndarray) -> tuple[DetectionStats, OverlayState]:
+    face_result = face_model(frame, verbose=False)[0]
+    head_result = head_model(frame, verbose=False)[0]
 
-% 后续还可进一步结合头部姿态估计（Head Pose Estimation）与人脸关键点检测等方法，提高抬头状态识别准确率。
+    face_boxes = boxes_xyxy(face_result)
+    head_boxes = boxes_xyxy(head_result)
+    face_count = len(face_boxes)
+    head_count = len(head_boxes)
+    head_up_flags, matched_faces = match_heads_to_faces(face_boxes, head_boxes)
+    head_up_count = sum(head_up_flags)
+    head_up_rate = head_up_count / head_count if head_count > 0 else 0.0
 
-% \subsubsection{抬头率计算}
-
-% 系统根据当前帧中检测到的人脸数量计算抬头率。
-
-% 设：
-
-% \begin{itemize}
-%     \item 当前帧学生总人数为 $N$；
-%     \item 检测到人脸的学生人数为 $M$；
-% \end{itemize}
-
-% 则当前帧抬头率为：
-
-% \[
-% R = \frac{M}{N} \times 100\%
-% \]
+    stats = DetectionStats(
+        face_count=face_count,
+        head_count=head_count,
+        head_up_count=head_up_count,
+        head_up_rate=head_up_rate,
+    )
+    overlay = OverlayState(
+        stats=stats,
+        face_boxes=face_boxes,
+        head_boxes=head_boxes,
+        head_up_flags=head_up_flags,
+        matched_face_indices=matched_faces,
+    )
+    return stats, overlay
+\end{lstlisting}
 
 
 \subsection{时间轴对齐模块}
 
-% 由于课件识别流程与学生行为分析流程分别来自两路视频，因此需要基于时间戳对两路结果进行时间轴对齐。
-% 主要步骤包括：
-
-% \begin{enumerate}
-%     \item 对两路视频统一记录时间戳；
-%     \item 将每一页 PPT 的停留时间区间与对应时间段内的抬头率数据进行关联；
-%     \item 统计每页 PPT 对应时间段内的平均抬头率。
-% \end{enumerate}
-
-% 通过时间轴对齐，可以建立“课件内容”与“学生课堂行为”之间的对应关系。
-
-% \subsection{课堂效率分析}
-
-% 在完成课件时间轴与抬头率时间轴融合后，可以进一步对课堂效率进行分析。
-
-% 本项目主要从以下几个方面进行统计：
-
-% \begin{itemize}
-%     \item 每页 PPT 的平均抬头率；
-%     \item 整堂课平均抬头率；
-%     \item 抬头率随时间变化趋势；
-%     \item 不同课件内容对应的学生注意力变化情况。
-% \end{itemize}
-
-% 本项目认为抬头率和注意力持续时间，能够在一定程度上反映课堂参与情况与教学效果。
-
-% 因此，通过结合 PPT 内容变化、页面停留时间和学生抬头率变化可以实现对课堂效率的综合分析。
+抬头率模块为每个采样点保存视频时间戳。时间轴对齐时直接使用该时间戳作为横轴，得到整堂课的抬头率序列。若后续需要与课件页面关联，只需按页面起止时间截取对应片段并计算均值。本项目当前实验主要展示整堂课抬头率变化，不展开课件提取部分。
 
 
 % \section{数据来源与处理计划}
@@ -560,16 +529,15 @@ warped = cv2.warpPerspective(img, M, (max_width, max_height))
 
 \subsubsection{抬头率计算准确性评估}
 
-% 学生行为分析部分主要评价学生检测、人脸检测和抬头率统计结果。实验中选取不同人数规模、不同光照条件和不同遮挡程度的课堂视频片段，人工标注学生总人数、可见人脸数量和抬头状态，作为算法评价依据。
+学生抬头检测部分主要评价头部状态检测、学生总数估计和抬头率统计结果。评价时以人工逐帧标注的学生头部状态作为基准，将系统输出的抬头人数、低头人数和总人数与标注结果进行对比。对于检测模型本身，采用 Precision、Recall 和 mAP@0.5 衡量头部目标定位和状态分类效果；对于抬头率统计结果，采用平均绝对误差衡量系统输出与人工统计之间的偏差。
 
-% \begin{itemize}
-%     \item \textbf{目标检测性能}：采用 mAP@0.5、Precision 和 Recall 评价 YOLO 模型对学生目标与人脸目标的检测能力，分析远距离、小目标和遮挡情况下的检测稳定性。
-%     \item \textbf{抬头率统计误差}：以人工标注的抬头人数为基准，计算算法输出抬头率与真实抬头率之间的平均绝对误差 MAE：
-%     \[
-%     E = \frac{1}{T} \sum_{t=1}^{T} \left|R_{pred,t} - R_{true,t}\right|
-%     \]
-%     其中 $T$ 为采样总帧数，$R_{pred,t}$ 为第 $t$ 帧算法计算抬头率，$R_{true,t}$ 为第 $t$ 帧人工标注抬头率。
-% \end{itemize}
+设测试视频共采样 $T$ 帧，第 $t$ 帧算法输出抬头率为 $R_{pred,t}$，人工标注抬头率为 $R_{true,t}$，则抬头率平均绝对误差定义为：
+
+\[
+E = \frac{1}{T} \sum_{t=1}^{T} \left|R_{pred,t} - R_{true,t}\right|
+\]
+
+该指标直接反映抬头率数值的统计偏差。与单纯评价检测框是否重合相比，抬头率误差更贴近本项目的最终应用目标，因为课堂分析关注的是群体状态比例及其随时间变化的趋势。实验分析中同时检查可视化叠加图，确认误差主要来源于远距离小目标、遮挡、侧脸和短时运动模糊等因素。
 
 \subsubsection{系统综合性能评估}
 
@@ -627,9 +595,74 @@ warped = cv2.warpPerspective(img, M, (max_width, max_height))
 
 \subsection{学生抬头检测实验}
 
+学生抬头检测实验使用前置摄像机视频。系统按固定间隔抽帧，检测抬头和低头两类头部目标，逐帧统计学生总数、抬头人数、低头人数和抬头率。图 \ref{fig:taitou_original_overlay} 展示原始帧和检测叠加结果。
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{taitou/original_frame.png}
+        \caption{原始课堂帧}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{taitou/detect_overlay.png}
+        \caption{检测结果叠加}
+    \end{subfigure}
+    \caption{前置摄像机学生区域检测结果}
+    \label{fig:taitou_original_overlay}
+\end{figure}
+
+检测叠加图中，绿色框表示匹配到人脸的头部，橙色框表示未匹配到人脸的头部。头部框来自 yolo-head，人脸框来自 yolo-face。左上角同步显示时间、抬头人数、学生总数、人脸数量和抬头率。检测框和统计值保持对应，便于检查单帧结果。
+
+状态判定以人脸框和头部框的匹配关系为依据。人脸中心落入头部框时记为抬头，没有匹配到人脸的头部记为低头。人脸数量用于观察正脸可见程度，最终抬头率按匹配后的头部状态计算。
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{taitou/head_up_low.png}
+        \caption{低抬头率片段}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{taitou/head_up_mid.png}
+        \caption{中等抬头率片段}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.32\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{taitou/head_up_high.png}
+        \caption{高抬头率片段}
+    \end{subfigure}
+    \caption{不同抬头率水平下的检测结果}
+    \label{fig:taitou_levels}
+\end{figure}
+
+图 \ref{fig:taitou_levels} 展示低、中、高三种抬头率片段。低抬头率片段中低头目标占比较高，抬头率为 $11.5\%$；中等片段中两类目标数量接近，抬头率为 $50.0\%$；高抬头率片段中大部分学生被判为抬头，抬头率为 $89.5\%$。三组截图显示抬头率随群体头部姿态变化同步变化。
+
+课堂画面存在遮挡和远距离小目标，单帧结果会有波动。实验用滑动窗口平滑抬头率，保留整体变化趋势。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{taitou/rate_trend.png}
+    \caption{整堂课抬头率变化趋势}
+    \label{fig:taitou_trend}
+\end{figure}
+
+图 \ref{fig:taitou_trend} 展示整堂课抬头率趋势。曲线整体处于中等区间，局部有上升和下降。上升段表示更多学生面向前方，下降段表示低头比例增加。趋势曲线反映群体状态，比单帧结果更稳定。
+
+实验结果说明，抬头率模块可以完成单帧检测、逐帧统计和整堂课趋势输出。叠加图用于检查检测结果，低中高截图用于展示不同状态，趋势图用于观察课堂过程中的连续变化。
+
 
 
 \subsection{系统综合分析}
+
+系统综合分析只基于抬头率序列展开。每个采样点包含时间戳、抬头人数、低头人数、学生总数和抬头率。系统先检查单帧叠加结果，再查看低中高片段，最后读取整堂课趋势曲线。三类结果对应局部检测、状态对比和整体走势。
+
+从趋势上看，抬头率并非稳定常数，而是随课堂过程持续波动。高抬头率区间说明更多学生面向前方，低抬头率区间说明低头姿态增多。该指标不直接判断学习效果，只记录视觉姿态比例。抬头率适合作为课堂状态分析的基础数据，后续可再与课件、语音和互动信息结合。
 
 
 \section{总结与展望}
