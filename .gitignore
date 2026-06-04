@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+weights/
+data/
+output/segments/
+output/annotated/
+output/viewable/
+output/progress.json
+*.log
+!output/logs/*.log
+A.log
